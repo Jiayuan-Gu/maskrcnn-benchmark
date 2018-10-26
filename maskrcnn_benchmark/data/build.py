@@ -14,7 +14,8 @@ from .collate_batch import BatchCollator
 from .transforms import build_transforms
 
 
-def build_dataset(dataset_list, transforms, dataset_catalog, is_train=True):
+def build_dataset(dataset_list, transforms, dataset_catalog,
+                  is_train=True, extra_args=None):
     """
     Arguments:
         dataset_list (list[str]): Contains the names of the datasets, i.e.,
@@ -23,6 +24,7 @@ def build_dataset(dataset_list, transforms, dataset_catalog, is_train=True):
         dataset_catalog (DatasetCatalog): contains the information on how to
             construct a dataset.
         is_train (bool): whether to setup the dataset for training or testing
+        extra_args (list): extra arguments to update factory args
     """
     if not isinstance(dataset_list, (list, tuple)):
         raise RuntimeError(
@@ -37,6 +39,10 @@ def build_dataset(dataset_list, transforms, dataset_catalog, is_train=True):
         if data["factory"] == "COCODataset":
             args["remove_images_without_annotations"] = is_train
         args["transforms"] = transforms
+        if extra_args:
+            factory_args = factory.get_default_extra_args()
+            factory_args.merge_from_list(extra_args)
+            args.update(factory_args)
         # make dataset from factory
         dataset = factory(**args)
         datasets.append(dataset)
@@ -146,7 +152,8 @@ def make_data_loader(cfg, is_train=True, is_distributed=False, start_iter=0):
     dataset_list = cfg.DATASETS.TRAIN if is_train else cfg.DATASETS.TEST
 
     transforms = build_transforms(cfg, is_train)
-    datasets = build_dataset(dataset_list, transforms, DatasetCatalog, is_train)
+    datasets = build_dataset(dataset_list, transforms, DatasetCatalog, is_train,
+                             extra_args=cfg.DATASETS.ARGS)
 
     data_loaders = []
     for dataset in datasets:

@@ -8,7 +8,8 @@ from maskrcnn_benchmark.structures.segmentation_mask import SegmentationMask
 
 class COCODataset(torchvision.datasets.coco.CocoDetection):
     def __init__(
-        self, ann_file, root, remove_images_without_annotations, transforms=None
+        self, ann_file, root, remove_images_without_annotations, transforms=None,
+            ignore_crowd=True,
     ):
         super(COCODataset, self).__init__(root, ann_file)
 
@@ -31,13 +32,22 @@ class COCODataset(torchvision.datasets.coco.CocoDetection):
         }
         self.id_to_img_map = {k: v for k, v in enumerate(self.ids)}
         self.transforms = transforms
+        self.ignore_crowd = ignore_crowd
+
+    @staticmethod
+    def get_default_extra_args():
+        """get default extra arguments for specific dataset"""
+        from yacs.config import CfgNode as CN
+        _C = CN()
+        _C.ignore_crowd = True
+        return _C
 
     def __getitem__(self, idx):
         img, anno = super(COCODataset, self).__getitem__(idx)
 
         # filter crowd annotations
-        # TODO might be better to add an extra field
-        anno = [obj for obj in anno if obj["iscrowd"] == 0]
+        if self.ignore_crowd:
+            anno = [obj for obj in anno if obj["iscrowd"] == 0]
 
         boxes = [obj["bbox"] for obj in anno]
         boxes = torch.as_tensor(boxes).reshape(-1, 4)  # guard against no boxes
