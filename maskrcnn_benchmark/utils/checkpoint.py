@@ -17,23 +17,18 @@ class Checkpointer(object):
         optimizer=None,
         scheduler=None,
         save_dir="",
-        save_to_disk=None,
         logger=None,
     ):
         self.model = model
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.save_dir = save_dir
-        self.save_to_disk = save_to_disk
         if logger is None:
             logger = logging.getLogger(__name__)
         self.logger = logger
 
     def save(self, name, **kwargs):
         if not self.save_dir:
-            return
-
-        if not self.save_to_disk:
             return
 
         data = {}
@@ -105,11 +100,10 @@ class DetectronCheckpointer(Checkpointer):
         optimizer=None,
         scheduler=None,
         save_dir="",
-        save_to_disk=None,
         logger=None,
     ):
         super(DetectronCheckpointer, self).__init__(
-            model, optimizer, scheduler, save_dir, save_to_disk, logger
+            model, optimizer, scheduler, save_dir, logger
         )
         self.cfg = cfg.clone()
 

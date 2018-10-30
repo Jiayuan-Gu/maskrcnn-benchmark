@@ -11,29 +11,25 @@ import torch
 from tqdm import tqdm
 
 from ..structures.bounding_box import BoxList
-from ..utils.comm import is_main_process
-from ..utils.comm import scatter_gather
-from ..utils.comm import synchronize
-
 
 from maskrcnn_benchmark.modeling.roi_heads.mask_head.inference import Masker
 from maskrcnn_benchmark.structures.boxlist_ops import boxlist_iou
 
 
-def compute_on_dataset(model, data_loader, device):
+def compute_on_dataset(model, data_loader):
     model.eval()
-    results_dict = {}
+    results_dicts = [dict() for _ in model.devices]
     cpu_device = torch.device("cpu")
-    for i, batch in tqdm(enumerate(data_loader)):
-        images, targets, image_ids = batch
-        images = images.to(device)
+    for batch in tqdm(data_loader):
+        data_dict, image_ids = batch
         with torch.no_grad():
-            output = model(images)
-            output = [o.to(cpu_device) for o in output]
-        results_dict.update(
-            {img_id: result for img_id, result in zip(image_ids, output)}
-        )
-    return results_dict
+            outputs = model(data_dict)
+            for ind, boxes_list in enumerate(outputs):
+                boxes_list = [boxes.to(cpu_device) for boxes in boxes_list]
+                results_dicts[ind].update(
+                    {img_id: boxes for img_id, boxes in zip(image_ids[ind], boxes_list)}
+                )
+    return results_dicts
 
 
 def prepare_for_coco_detection(predictions, dataset):
@@ -257,10 +253,7 @@ def evaluate_predictions_on_coco(
     return coco_eval
 
 
-def _accumulate_predictions_from_multiple_gpus(predictions_per_gpu):
-    all_predictions = scatter_gather(predictions_per_gpu)
-    if not is_main_process():
-        return
+def _accumulate_predictions_from_multiple_gpus(all_predictions):
     # merge the list of dicts
     predictions = {}
     for p in all_predictions:
@@ -351,26 +344,16 @@ def inference(
     data_loader,
     iou_types=("bbox",),
     box_only=False,
-    device="cuda",
     expected_results=(),
     expected_results_sigma_tol=4,
     output_folder=None,
 ):
-
-    # convert to a torch.device for efficiency
-    device = torch.device(device)
-    num_devices = (
-        torch.distributed.deprecated.get_world_size()
-        if torch.distributed.deprecated.is_initialized()
-        else 1
-    )
+    num_devices = len(model.devices)
     logger = logging.getLogger("maskrcnn_benchmark.inference")
     dataset = data_loader.dataset
     logger.info("Start evaluation on {} images".format(len(dataset)))
     start_time = time.time()
-    predictions = compute_on_dataset(model, data_loader, device)
-    # wait for all processes to complete before measuring the time
-    synchronize()
+    predictions = compute_on_dataset(model, data_loader)
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=total_time))
     logger.info(
@@ -380,8 +363,6 @@ def inference(
     )
 
     predictions = _accumulate_predictions_from_multiple_gpus(predictions)
-    if not is_main_process():
-        return
 
     if output_folder:
         torch.save(predictions, os.path.join(output_folder, "predictions.pth"))

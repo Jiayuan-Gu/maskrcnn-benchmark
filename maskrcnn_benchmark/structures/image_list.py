@@ -34,8 +34,11 @@ def to_image_list(tensors, size_divisible=0):
     the Tensors with zeros so that they have the same
     shape
     """
-    if isinstance(tensors, torch.Tensor) and size_divisible > 0:
-        tensors = [tensors]
+    if isinstance(tensors, torch.Tensor):
+        if size_divisible > 0:
+            tensors = [tensors]
+        elif tensors.dim() == 3:
+            tensors.unsqueeze_(dim=0)
 
     if isinstance(tensors, ImageList):
         return tensors

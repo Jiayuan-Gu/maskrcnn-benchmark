@@ -3,8 +3,8 @@ import bisect
 import copy
 import logging
 
+import torch
 import torch.utils.data
-from maskrcnn_benchmark.utils.comm import get_world_size
 from maskrcnn_benchmark.utils.imports import import_file
 
 from . import datasets as D
@@ -59,9 +59,7 @@ def build_dataset(dataset_list, transforms, dataset_catalog,
     return [dataset]
 
 
-def make_data_sampler(dataset, shuffle, distributed):
-    if distributed:
-        return samplers.DistributedSampler(dataset, shuffle=shuffle)
+def make_data_sampler(dataset, shuffle):
     if shuffle:
         sampler = torch.utils.data.sampler.RandomSampler(dataset)
     else:
@@ -105,8 +103,8 @@ def make_batch_data_sampler(
     return batch_sampler
 
 
-def make_data_loader(cfg, is_train=True, is_distributed=False, start_iter=0):
-    num_gpus = get_world_size()
+def make_data_loader(cfg, is_train=True, start_iter=0):
+    num_gpus = max(1, torch.cuda.device_count())
     if is_train:
         images_per_batch = cfg.SOLVER.IMS_PER_BATCH
         assert (
@@ -123,7 +121,7 @@ def make_data_loader(cfg, is_train=True, is_distributed=False, start_iter=0):
         ), "TEST.IMS_PER_BATCH ({}) must be divisible by the number "
         "of GPUs ({}) used.".format(images_per_batch, num_gpus)
         images_per_gpu = images_per_batch // num_gpus
-        shuffle = False if not is_distributed else True
+        shuffle = False
         num_iters = None
         start_iter = 0
 
@@ -157,11 +155,11 @@ def make_data_loader(cfg, is_train=True, is_distributed=False, start_iter=0):
 
     data_loaders = []
     for dataset in datasets:
-        sampler = make_data_sampler(dataset, shuffle, is_distributed)
+        sampler = make_data_sampler(dataset, shuffle)
         batch_sampler = make_batch_data_sampler(
-            dataset, sampler, aspect_grouping, images_per_gpu, num_iters, start_iter
+            dataset, sampler, aspect_grouping, images_per_batch, num_iters, start_iter
         )
-        collator = BatchCollator(cfg.DATALOADER.SIZE_DIVISIBILITY)
+        collator = BatchCollator(num_gpus, cfg.DATALOADER.SIZE_DIVISIBILITY)
         num_workers = cfg.DATALOADER.NUM_WORKERS
         data_loader = torch.utils.data.DataLoader(
             dataset,

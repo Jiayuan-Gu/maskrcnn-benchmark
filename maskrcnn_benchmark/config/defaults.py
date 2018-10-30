@@ -244,6 +244,7 @@ _C.SOLVER.WARMUP_FACTOR = 1.0 / 3
 _C.SOLVER.WARMUP_ITERS = 500
 _C.SOLVER.WARMUP_METHOD = "linear"
 
+# Change periods according to batch size
 _C.SOLVER.CHECKPOINT_PERIOD = 2500
 
 # Number of images per batch
@@ -266,6 +267,10 @@ _C.TEST.IMS_PER_BATCH = 8
 # ---------------------------------------------------------------------------- #
 # Misc options
 # ---------------------------------------------------------------------------- #
-_C.OUTPUT_DIR = "."
+_C.OUTPUT_DIR = "./outputs"
 
 _C.PATHS_CATALOG = os.path.join(os.path.dirname(__file__), "paths_catalog.py")
+
+# For reproducibility...but not really because modern fast GPU libraries use
+# non-deterministic op implementations
+_C.RNG_SEED = 3

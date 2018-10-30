@@ -1,7 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 # Set up custom environment before nearly anything else is imported
 # NOTE: this should be the first import (no not reorder)
-from maskrcnn_benchmark.utils.env import setup_environment  # noqa F401 isort:skip
 
 import argparse
 import os
@@ -13,9 +12,9 @@ from maskrcnn_benchmark.engine.inference import inference
 from maskrcnn_benchmark.modeling.detector import build_detection_model
 from maskrcnn_benchmark.utils.checkpoint import DetectronCheckpointer
 from maskrcnn_benchmark.utils.collect_env import collect_env_info
-from maskrcnn_benchmark.utils.comm import synchronize, get_rank
 from maskrcnn_benchmark.utils.logger import setup_logger
 from maskrcnn_benchmark.utils.miscellaneous import mkdir
+from maskrcnn_benchmark.nn.parallel.data_parallel import MutableDataParallel
 
 
 def main():
@@ -27,7 +26,6 @@ def main():
         metavar="FILE",
         help="path to config file",
     )
-    parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument(
         "opts",
         help="Modify config options using the command-line",
@@ -37,21 +35,14 @@ def main():
 
     args = parser.parse_args()
 
-    num_gpus = int(os.environ["WORLD_SIZE"]) if "WORLD_SIZE" in os.environ else 1
-    distributed = num_gpus > 1
-
-    if distributed:
-        torch.cuda.set_device(args.local_rank)
-        torch.distributed.deprecated.init_process_group(
-            backend="nccl", init_method="env://"
-        )
+    num_gpus = torch.cuda.device_count()
 
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     cfg.freeze()
 
     save_dir = ""
-    logger = setup_logger("maskrcnn_benchmark", save_dir, get_rank())
+    logger = setup_logger("maskrcnn_benchmark", save_dir)
     logger.info("Using {} GPUs".format(num_gpus))
     logger.info(cfg)
 
@@ -59,7 +50,10 @@ def main():
     logger.info("\n" + collect_env_info())
 
     model = build_detection_model(cfg)
-    model.to(cfg.MODEL.DEVICE)
+    device = torch.device(cfg.MODEL.DEVICE)
+    model.to(device)
+    assert device.type != "cpu" or torch.cuda.device_count() == 0
+    model = MutableDataParallel(model)
 
     checkpointer = DetectronCheckpointer(cfg, model)
     _ = checkpointer.load(cfg.MODEL.WEIGHT)
@@ -74,19 +68,17 @@ def main():
             output_folder = os.path.join(cfg.OUTPUT_DIR, "inference", dataset_name)
             mkdir(output_folder)
             output_folders[idx] = output_folder
-    data_loaders_val = make_data_loader(cfg, is_train=False, is_distributed=distributed)
+    data_loaders_val = make_data_loader(cfg, is_train=False)
     for output_folder, data_loader_val in zip(output_folders, data_loaders_val):
         inference(
             model,
             data_loader_val,
             iou_types=iou_types,
             box_only=cfg.MODEL.RPN_ONLY,
-            device=cfg.MODEL.DEVICE,
             expected_results=cfg.TEST.EXPECTED_RESULTS,
             expected_results_sigma_tol=cfg.TEST.EXPECTED_RESULTS_SIGMA_TOL,
             output_folder=output_folder,
         )
-        synchronize()
 
 
 if __name__ == "__main__":

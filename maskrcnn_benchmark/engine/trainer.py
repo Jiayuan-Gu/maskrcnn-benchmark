@@ -4,35 +4,23 @@ import logging
 import time
 
 import torch
-from torch.distributed import deprecated as dist
 
-from maskrcnn_benchmark.utils.comm import get_world_size
 from maskrcnn_benchmark.utils.metric_logger import MetricLogger
+from maskrcnn_benchmark.nn.parallel.scatter_gather import Gather
 
 
-def reduce_loss_dict(loss_dict):
-    """
-    Reduce the loss dictionary from all processes so that process with rank
-    0 has the averaged results. Returns a dict with the same fields as
-    loss_dict, after reduction.
-    """
-    world_size = get_world_size()
-    if world_size < 2:
-        return loss_dict
-    with torch.no_grad():
-        loss_names = []
-        all_losses = []
-        for k, v in loss_dict.items():
-            loss_names.append(k)
-            all_losses.append(v)
-        all_losses = torch.stack(all_losses, dim=0)
-        dist.reduce(all_losses, dst=0)
-        if dist.get_rank() == 0:
-            # only main process gets accumulated, so only divide by
-            # world_size in this case
-            all_losses /= world_size
-        reduced_losses = {k: v for k, v in zip(loss_names, all_losses)}
-    return reduced_losses
+def parse_output_dicts(output_dicts):
+    # TODO: add metric dict
+    loss_dict = dict()
+    result_dict = dict()
+
+    for k in output_dicts[0].keys():
+        values = tuple(d[k] for d in output_dicts)
+        if k.startswith("loss"):
+            loss_dict[k] = values
+        else:
+            result_dict[k] = values
+    return loss_dict, result_dict
 
 
 def do_train(
@@ -41,10 +29,47 @@ def do_train(
     optimizer,
     scheduler,
     checkpointer,
-    device,
-    checkpoint_period,
     arguments,
+    checkpoint_period,
 ):
+    """ Training interface
+
+    .. note::
+        It is a little tricky when doing training in parallel.
+        1. Single gpu training
+            Straightforward pipeline. output = model(*inputs, **kwargs)
+            output is just what model.forward return, and allocated on current device.
+        2. Multi gpus training (data parallel)
+            torch.nn.DataParallel will do four steps to enable data parallel:
+            (1) Scatter the inputs from data_loader.
+                It assumes all tensors in inputs are already collated,
+                and split them evenly with structure remained to all devices.
+            (2) Replicate module to all devices (differentiable)
+            (3) Forward model in parallel
+            (4) Gather all the outputs to the first device.
+                The output of module should be tensor or dict.
+                It stack scalars or concat tensors along 0-axis
+            Thus, we use MutableDataParallel to make things easier
+        3. Distributed training (single gpu per process)
+            For each process, model is identical to that in single gpu training.
+            losses could be backward on each process,
+            unless there are some losses calculated on the full batch.
+            Only master process will have valid logger, meters, checkpoint
+
+    Args:
+        model (torch.nn.Module):
+        data_loader (torch.utils.data.DataLoader):
+            When doing distributed training,
+            data_loader will provide corresponding data for each process.
+        optimizer (torch.optim.Optimizer):
+        scheduler (torch.optim.lr_scheduler._LRScheduler):
+        checkpointer (DetectronCheckpointer):
+        arguments (dict): arguments to save in the checkpoint
+        checkpoint_period (int): period to save checkpoint
+
+    Returns:
+
+    """
     logger = logging.getLogger("maskrcnn_benchmark.trainer")
     logger.info("Start training")
     meters = MetricLogger(delimiter="  ")
@@ -53,23 +78,22 @@ def do_train(
     model.train()
     start_training_time = time.time()
     end = time.time()
-    for iteration, (images, targets, _) in enumerate(data_loader, start_iter):
+    for iteration, (data_dicts, img_ids) in enumerate(data_loader, start_iter):
         data_time = time.time() - end
         arguments["iteration"] = iteration
 
         scheduler.step()
 
-        images = images.to(device)
-        targets = [target.to(device) for target in targets]
+        output_dicts = model(data_dicts)
 
-        loss_dict = model(images, targets)
+        loss_dict, result_dict = parse_output_dicts(output_dicts)
+        # average loss across all gpus
+        loss_dict = {k: Gather.apply(0, 0, *v).mean() for k, v in loss_dict.items()}
 
         losses = sum(loss for loss in loss_dict.values())
 
-        # reduce losses over all GPUs for logging purposes
-        loss_dict_reduced = reduce_loss_dict(loss_dict)
-        losses_reduced = sum(loss for loss in loss_dict_reduced.values())
-        meters.update(loss=losses_reduced, **loss_dict_reduced)
+        # with torch.no_grad():
+        meters.update(loss=losses, **loss_dict)
 
         optimizer.zero_grad()
         losses.backward()

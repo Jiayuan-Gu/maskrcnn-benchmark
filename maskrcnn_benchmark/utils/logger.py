@@ -5,12 +5,9 @@ import sys
 import time
 
 
-def setup_logger(name, save_dir, distributed_rank, timestamp=True):
+def setup_logger(name, save_dir, timestamp=True):
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
-    # don't log results for the non-master process
-    if distributed_rank > 0:
-        return logger
     ch = logging.StreamHandler(stream=sys.stdout)
     ch.setLevel(logging.DEBUG)
     formatter = logging.Formatter("%(asctime)s %(name)s %(levelname)s: %(message)s")
@@ -18,8 +15,8 @@ def setup_logger(name, save_dir, distributed_rank, timestamp=True):
     logger.addHandler(ch)
 
     if save_dir:
-        timestamp = time.strftime(".%m_%d_%H_%M_%S") if timestamp else ''
-        fh = logging.FileHandler(os.path.join(save_dir, "log%s.txt" % timestamp))
+        timestamp = time.strftime("%m_%d_%H_%M_%S") if timestamp else 'log'
+        fh = logging.FileHandler(os.path.join(save_dir, "%s.txt" % timestamp))
         fh.setLevel(logging.DEBUG)
         fh.setFormatter(formatter)
         logger.addHandler(fh)

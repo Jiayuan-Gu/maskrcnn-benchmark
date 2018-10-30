@@ -194,11 +194,11 @@ class BoxList(object):
 
     # Tensor-like methods
 
-    def to(self, device):
-        bbox = BoxList(self.bbox.to(device), self.size, self.mode)
+    def to(self, device, **kwargs):
+        bbox = BoxList(self.bbox.to(device, **kwargs), self.size, self.mode)
         for k, v in self.extra_fields.items():
             if hasattr(v, "to"):
-                v = v.to(device)
+                v = v.to(device, **kwargs)
             bbox.add_field(k, v)
         return bbox
 
